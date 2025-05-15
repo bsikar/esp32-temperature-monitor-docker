@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Live Temperature Plot</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding:0; background-color: #f0f2f5; color: #333; }
+        header { background-color: #4A90E2; color: white; padding: 15px 30px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        header h1 { margin: 0; font-size: 1.8em; }
+        #controls { text-align: center; margin: 20px 0; padding: 10px; background-color: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.05); border-radius: 8px; display: inline-block; margin-left: 50%; transform: translateX(-50%);}
+        #controls label { margin-right: 10px; font-weight: bold; }
+        #controls select { padding: 8px 12px; border-radius: 4px; border: 1px solid #ccc; font-size: 1em; }
+        #chartContainer {
+            width: 90%;
+            max-width: 1200px;
+            height: 500px;
+            margin: 20px auto;
+            padding: 25px;
+            background-color: white;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border-radius: 8px;
+        }
+        #statusMessage {
+            text-align: center;
+            padding: 15px;
+            color: #555;
+            font-size: 1.1em;
+        }
+        canvas { max-height: 450px; } 
+    </style>
+</head>
+<body>
+    <header>
+        <h1>Live Temperature Monitor</h1>
+    </header>
+
+    <div id="controls">
+        <label for="timespanSelect">Select Time Range:</label>
+        <select id="timespanSelect">
+            <option value="1h">Last 1 Hour</option>
+            <option value="6h">Last 6 Hours</option>
+            <option value="24h" selected>Last 24 Hours</option>
+            <option value="7d">Last 7 Days</option>
+            <option value="30d">Last 30 Days</option>
+            <option value="all">All Data (may be slow)</option>
+        </select>
+    </div>
+
+    <div id="chartContainer">
+        <canvas id="tempChart"></canvas>
+        <div id="statusMessage">Loading data...</div>
+    </div>
+
+    <script>
+        const ctx = document.getElementById('tempChart').getContext('2d');
+        const statusMessage = document.getElementById('statusMessage');
+        const timespanSelect = document.getElementById('timespanSelect');
+        let chart;
+        let currentUpdateInterval;
+
+        function getXAxisSettings(timespan) {
+            let unit = 'hour';
+            let tooltipFormat = 'MMM d, yyyy, HH:mm:ss';
+            let displayFormats = {
+                millisecond: 'HH:mm:ss.SSS',
+                second: 'HH:mm:ss',
+                minute: 'HH:mm',
+                hour: 'MMM d, HH:mm',
+                day: 'MMM d, yyyy',
+                week: 'MMM d, yyyy',
+                month: 'MMM yyyy',
+                quarter: 'MMM yyyy',
+                year: 'yyyy',
+            };
+
+            switch (timespan) {
+                case '1h': unit = 'minute'; displayFormats.hour = 'HH:mm'; break;
+                case '6h': unit = 'hour'; displayFormats.hour = 'HH:mm'; break;
+                case '24h': unit = 'hour'; break;
+                case '7d': unit = 'day'; break;
+                case '30d': unit = 'day'; break;
+                case 'all': unit = 'day'; break;
+            }
+            return { unit, tooltipFormat, displayFormats };
+        }
+
+        function initializeChart() {
+            const initialTimespan = timespanSelect.value;
+            const xAxisSettings = getXAxisSettings(initialTimespan);
+
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: { datasets: [] },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                unit: xAxisSettings.unit,
+                                tooltipFormat: xAxisSettings.tooltipFormat,
+                                displayFormats: xAxisSettings.displayFormats
+                            },
+                            title: { display: true, text: 'Time' }
+                        },
+                        y: {
+                            title: { display: true, text: 'Temperature (°C)' },
+                            beginAtZero: false
+                        }
+                    },
+                    plugins: {
+                        legend: { position: 'top' },
+                        tooltip: { mode: 'index', intersect: false }
+                    },
+                    animation: { duration: 400 },
+                    interaction: {
+                        mode: 'nearest',
+                        axis: 'x',
+                        intersect: false
+                    }
+                }
+            });
+        }
+
+        function fetchDataAndUpdate() {
+            const selectedTimespanValue = timespanSelect.value;
+            const selectedTimespanText = timespanSelect.options[timespanSelect.selectedIndex].text;
+            statusMessage.textContent = `Loading data for: ${selectedTimespanText}...`;
+            statusMessage.style.color = '#555';
+            statusMessage.style.display = 'block';
+            document.getElementById('tempChart').style.display = 'none';
+
+            if (chart) {
+                const xAxisSettings = getXAxisSettings(selectedTimespanValue);
+                chart.options.scales.x.time.unit = xAxisSettings.unit;
+                chart.options.scales.x.time.tooltipFormat = xAxisSettings.tooltipFormat;
+                chart.options.scales.x.time.displayFormats = xAxisSettings.displayFormats;
+            }
+
+            fetch(`/data?timespan=${selectedTimespanValue}`)
+                .then(response => {
+                    if (!response.ok) {
+                        return response.json().then(errData => {
+                           throw new Error(errData.error || `Network response error: ${response.statusText} (${response.status})`);
+                        });
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    document.getElementById('tempChart').style.display = 'block';
+                    if (data.error) {
+                        console.error('Error from server:', data.error);
+                        statusMessage.textContent = `Error: ${data.error}`;
+                        statusMessage.style.color = 'red';
+                        chart.data.datasets = [];
+                    } else if (data.message) {
+                        statusMessage.textContent = data.message;
+                        chart.data.datasets = [];
+                    } else {
+                        const datasets = Object.entries(data).map(([sensorName, values], index) => {
+                            const colors = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40'];
+                            const color = colors[index % colors.length];
+                            return {
+                                label: sensorName,
+                                data: values.timestamps.map((t, i) => ({ x: new Date(t), y: values.temps[i] })),
+                                borderColor: color,
+                                backgroundColor: color + '33',
+                                borderWidth: 1.5,
+                                fill: false,
+                                tension: 0.1,
+                                pointRadius: values.timestamps.length > 200 ? 0 : 2,
+                                pointHoverRadius: 4
+                            };
+                        });
+
+                        if (datasets.length > 0 && datasets.some(ds => ds.data.length > 0)) {
+                            statusMessage.style.display = 'none';
+                        } else {
+                            statusMessage.textContent = `No temperature data available for ${selectedTimespanText}.`;
+                        }
+                        chart.data.datasets = datasets;
+                    }
+                    chart.update('none');
+                })
+                .catch(error => {
+                    document.getElementById('tempChart').style.display = 'block';
+                    console.error('Fetch error:', error);
+                    statusMessage.textContent = `Failed to load data: ${error.message}`;
+                    statusMessage.style.color = 'red';
+                    statusMessage.style.display = 'block';
+                    if (chart) {
+                        chart.data.datasets = [];
+                        chart.update('none');
+                    }
+                });
+        }
+        
+        function startAutoRefresh(intervalMillis = 5000) {
+            if (currentUpdateInterval) {
+                clearInterval(currentUpdateInterval);
+            }
+            const selectedTimespan = timespanSelect.value;
+            if (['1h', '6h', '24h'].includes(selectedTimespan)) {
+                 currentUpdateInterval = setInterval(fetchDataAndUpdate, intervalMillis);
+                 console.log(`Auto-refresh started for ${selectedTimespan} every ${intervalMillis/1000}s.`);
+            } else {
+                console.log(`Auto-refresh disabled for timespan: ${selectedTimespan}.`);
+            }
+        }
+
+        timespanSelect.addEventListener('change', () => {
+            fetchDataAndUpdate(); 
+            startAutoRefresh(); 
+        });
+        
+        initializeChart();
+        fetchDataAndUpdate(); 
+        startAutoRefresh(); 
+    </script>
+</body>
+</html>
